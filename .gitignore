@@ -1,0 +1,49 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Python caches and build artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+build/
+dist/
+site/
+wheels/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Runtime files
+.slack_access_control.json
+.slack_bot.lock
+.discord_bot.lock
+conversation
+conversation-*
+*.db
+*.sqlite
+*.sqlite3
+
+# Generated exports
+exports/
+*.xlsx
+
+# Editor and OS files
+.DS_Store
+.idea/
+.vscode/
