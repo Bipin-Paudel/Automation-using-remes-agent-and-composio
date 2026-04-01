@@ -13,6 +13,40 @@ If you want the simplest Slack setup, use **Hermes Gateway**.
 
 If you want the best Reddit-specific bot with real Composio sessions per Slack user, use **`slack_bot.py`**.
 
+Recommended for this repo:
+
+- use **`slack_bot.py`** unless you specifically want Hermes Gateway to be the Slack-facing bot
+- use **Hermes Gateway** only when you want the quickest generic Slack setup and do not need the custom Reddit worker behavior
+
+## Sheet Ingest In Slack
+
+The custom `slack_bot.py` route includes direct sheet-ingest support.
+
+Supported links:
+
+- Google Sheets edit links
+- Google Sheets CSV export links
+- direct `.xlsx` URLs
+
+Typical Slack usage:
+
+1. send a readable document link
+2. say `read this`
+3. optionally follow up with `give me all that data in a new excel file`
+
+What the bot does:
+
+- converts Google Sheets edit links into machine-readable CSV export URLs
+- reads the full dataset when the file is publicly accessible
+- summarizes row count, columns, missing values, and sample rows in Slack
+- can generate a new Excel file from the parsed data
+
+Important:
+
+- Google Sheets must allow `Anyone with the link` access for direct reading
+- the Google Drive install prompt from `Slackbot` is Slack’s own UI behavior, not this repo’s code
+- the active runtime uses the Python sheet reader in `sheet_ingest/python_sheet_reader.py`
+
 Recommended app name:
 
 - `SkinPal Reddit Ops`
@@ -196,6 +230,8 @@ Use this if you want:
 - per-user Composio sessions
 - Reddit-only default tools
 - a custom Slack bot like your `discord_bot.py`
+- direct Google Sheet / CSV / Excel reading in Slack
+- Excel file creation from previously read document links
 
 ## Route A: Hermes Gateway Setup
 
@@ -343,8 +379,43 @@ The custom Slack bot:
 - responds directly in DMs
 - responds in channels and private channels when mentioned
 - formats replies using official Slack Block Kit patterns
-- supports a `tools` message to show available Composio tools
+- resolves direct Reddit tools before running the agent
+- routes every Slack message through Hermes first as the shared orchestrator
+- lets Hermes reply directly for normal chat, rewriting, planning, and synthesis
+- hands work to the Reddit/Composio engine only when Hermes decides the task needs Reddit tools or live Reddit context
+- supports a `tools` message to show available Reddit tools
+- supports `reddit capabilities` to explain the loaded toolkit in plain language
 - can turn Reddit analysis results into `.xlsx` Excel files and upload them back to Slack
+
+### Code Structure
+
+The Slack Reddit bot now uses a package layout instead of one large file.
+
+- `slack_bot.py`: wrapper entrypoint
+- `slack_reddit_agent/app.py`: Slack event handling and main runtime
+- `slack_reddit_agent/reddit_tools.py`: concrete Reddit tool fetching
+- `slack_reddit_agent/prompts.py`: workflow detection and agent setup
+- `slack_reddit_agent/hermes_bridge.py`: local Hermes CLI bridge for non-Reddit assistant tasks
+- `slack_reddit_agent/formatting.py`: Slack output rendering
+- `slack_reddit_agent/progress.py`: temporary status messages
+- `slack_reddit_agent/commands.py`: help, tools, and access commands
+- `slack_reddit_agent/exports.py`: Excel report creation
+- `slack_reddit_agent/sessions.py`: session and memory helpers
+- `slack_reddit_agent/config.py`: `.env` settings and constants
+- `slack_reddit_agent/runtime.py`: startup checks including Hermes gateway conflict detection
+
+### Runtime Model
+
+This bot is now designed as one Slack responder with a Hermes-first orchestration flow:
+
+- `Hermes orchestrator`: first-pass routing, direct chat replies, rewriting, synthesis, cleanup, and broader strategy help
+- `Composio Reddit engine`: invoked only when Hermes decides the task needs Reddit workflows such as search, post analysis, subreddit checks, drafting, or export preparation
+
+Best practice:
+
+- run only `uv run python slack_bot.py` for this Slack app
+- do not run Hermes Slack gateway on the same Slack app at the same time
+- if Hermes gateway is still running, the bot now treats it as a conflict by default
 
 ### Slack Message Format Used by `slack_bot.py`
 
@@ -418,6 +489,12 @@ It also includes recent Slack conversation context in the internal agent prompt 
 
 For `slack_bot.py`, use the project root `.env`.
 
+Start from the repo template so the variable names and defaults stay clean:
+
+```bash
+cp .env.example .env
+```
+
 Add:
 
 ```env
@@ -425,8 +502,16 @@ OPENAI_API_KEY=your_openai_key
 COMPOSIO_API_KEY=your_composio_key
 SLACK_BOT_TOKEN=xoxb-your-slack-bot-token
 SLACK_APP_TOKEN=xapp-your-slack-app-token
+# Optional bootstrap allowlist. If blank, claim the first admin in Slack DM after startup.
+SLACK_ALLOWED_USERS=U01234567890
 COMPOSIO_TOOLKITS=reddit
+COMPOSIO_TOOLKIT_VERSION_REDDIT=20260316_00
 OPENAI_MODEL=gpt-5.2
+HERMES_ENABLED=true
+ALLOW_HERMES_GATEWAY_CONFLICT=false
+HERMES_MODEL=
+HERMES_PROVIDER=
+HERMES_TIMEOUT_SECONDS=180
 COMPOSIO_SHARED_USER_ID=skinpal_reddit_shared
 REDDIT_BRAND_NAME=SkinPal
 REDDIT_BRAND_CONTEXT=We are a skincare brand focused on trustworthy education and useful Reddit-native content.
@@ -444,27 +529,39 @@ Important:
 - no spaces around `=`
 - `SLACK_BOT_TOKEN` must be `xoxb-...`
 - `SLACK_APP_TOKEN` must be `xapp-...`
+- start from `.env.example` instead of typing the whole file manually
 - `COMPOSIO_TOOLKITS=reddit` keeps the bot Reddit-focused by default
+- `COMPOSIO_TOOLKIT_VERSION_REDDIT=20260316_00` pins the Reddit toolkit version used by the bot
+- `HERMES_ENABLED=true` allows the bot to route general or explicitly prefixed tasks to Hermes
+- `ALLOW_HERMES_GATEWAY_CONFLICT=false` is the recommended production setting and avoids mixed Slack replies
 - `SLACK_ALLOWED_USERS` is now optional if you want to manage access directly from Slack
 - `COMPOSIO_SHARED_USER_ID` lets every Slack user operate through one shared Reddit connection
 - `COMPOSIO_SHARED_CONNECTED_ACCOUNT_ID` is optional and only needed if that shared Composio user has more than one Reddit account connected
 - the optional `REDDIT_*` settings make the bot much more specific to your brand, audience, and posting rules
+- `SLACK_HOME_CHANNEL` and `SLACK_HOME_CHANNEL_NAME` are for the Hermes Gateway route, not the custom `slack_bot.py` route
 
-### Step B2: Understand the Composio Part
+### Step B2: Understand the Composio + Hermes Part
 
-This is the main difference from Hermes.
+`slack_bot.py` now combines direct Composio Reddit execution with Hermes-first orchestration.
 
-`slack_bot.py` uses Composio directly in code.
-
-It does these things:
+For Reddit workflows, it does these things:
 
 1. reads `COMPOSIO_API_KEY`
 2. creates a Composio session for each Slack user
 3. limits the default toolkit to `reddit`
-4. passes Composio tools into the OpenAI agent
-5. keeps Slack conversation memory per user
+4. resolves concrete Reddit tools directly from Composio
+5. passes those Reddit tools into the OpenAI agent
+6. keeps Slack conversation memory per user
 
-That means this bot is truly Composio-connected, unlike a plain Slack connection by itself.
+For broader assistant workflows, it can also call Hermes locally. That is useful for:
+
+- rewriting
+- summarizing
+- strategy synthesis
+- cleanup of Reddit findings into business-ready output
+- natural chat support that is not a direct Reddit action
+
+The important difference is that the bot is no longer relying only on the 6 generic Composio meta-tools from `session.tools()`. It now fetches real Reddit tools like subreddit search, subreddit rules, post retrieval, comment retrieval, and posting tools before running the agent.
 
 ### Step B2.1: Best Ways To Ask The Bot
 
@@ -476,6 +573,18 @@ Good prompt patterns:
 - `draft a Reddit post for r/SkincareAddiction about niacinamide purging myths`
 - `analyze this Reddit thread and tell me the sentiment, pain points, and opportunity: https://reddit.com/...`
 - `make a weekly Reddit report and export it to Excel`
+- `reddit: export the top 25 Reddit posts about retinol this week into Excel with scores and insights`
+
+Explicit routing prefixes:
+
+- `reddit: ...` forces the Reddit engine
+- `hermes: ...` forces the Hermes direct-reply path
+- `general: ...` also forces the Hermes direct-reply path
+
+Examples:
+
+- `hermes: turn this Reddit analysis into a founder update`
+- `general: rewrite this in simpler language`
 
 You can also send:
 
@@ -576,6 +685,24 @@ Reddit toolkit default: reddit
 Slack bot is ready to receive DMs and @mentions
 ```
 
+### Step B4.1: Quick Smoke Test
+
+Run these checks in order after startup:
+
+1. open a DM with the bot
+2. if you left `SLACK_ALLOWED_USERS` blank, send `admin claim`
+3. send `help`
+4. send `tools`
+5. send `reddit capabilities`
+6. mention the bot once in a public channel
+
+Healthy signs:
+
+- the bot answers in DM
+- `tools` shows Reddit tools for your session
+- `reddit capabilities` returns a readable capability summary
+- channel mentions work only when the bot is actually mentioned
+
 ### Step B5: Use the Bot
 
 In DMs:
@@ -596,7 +723,11 @@ In private channels:
 Special message:
 
 - send `tools`
-- the bot will list available Composio tools for your session
+- the bot will list available Reddit tools for your session
+- send `reddit capabilities`
+- the bot will summarize its Reddit research, posting, and moderation powers
+- start a message with `reddit:` to force the Reddit engine
+- start a message with `hermes:` or `general:` to force the Hermes direct-reply path
 
 ### Step B5.1: Ask for Reddit Analysis
 
@@ -644,6 +775,23 @@ How it works:
 - dynamic access is stored in `.slack_access_control.json`
 - if `SLACK_ALLOWED_USERS` is still present in `.env`, those users remain allowed too
 - access commands only work in DM so your permission changes stay private
+
+Access roles:
+
+- `No access`
+  The user cannot use the bot normally and will be told to ask an admin for access, or use `admin claim` if this is the first setup.
+- `Allowed user`
+  The user can use the bot for Reddit research, drafting, thread analysis, Hermes-assisted rewrites, and Excel exports, but cannot manage access.
+- `Access admin`
+  The user can use the bot normally and can also manage admins and the allowlist from DM.
+
+Important details:
+
+- `admin claim` works only when no admin exists yet
+- `admin add <@user>` also adds that user to the allowlist
+- `admin remove <@user>` removes admin permission only
+- `allowlist remove <@user>` removes only the dynamic allowlist entry
+- users still listed in `SLACK_ALLOWED_USERS` in `.env` remain allowed as fallback users
 
 ### Step B5.2: Ask for Excel Files
 
@@ -717,6 +865,7 @@ If you still see it:
 
 Check:
 
+- the app was reinstalled after any scope or event changes
 - `app_mention` is enabled
 - `message.channels` is enabled
 - `channels:history` scope exists
@@ -727,6 +876,7 @@ Check:
 
 Check:
 
+- the app was reinstalled after any scope or event changes
 - `message.groups` is enabled
 - `groups:history` exists
 - bot was invited to the private channel
@@ -754,33 +904,74 @@ Fix:
 ~/.hermes/hermes-agent/venv/bin/python -m pip install slack-bolt
 ```
 
-### Problem 6: Composio tools are missing
+### Problem 6: Reddit tools are missing or only generic meta-tools appear
 
 Check:
 
 - `COMPOSIO_API_KEY` is correct
 - `COMPOSIO_TOOLKITS=reddit` is set
 - Reddit is connected in Composio
+- restart the bot
 - send `tools` in Slack to inspect tool access
+
+Healthy output should include Reddit tools such as:
+
+- `REDDIT_SEARCH_ACROSS_SUBREDDITS`
+- `REDDIT_GET_SUBREDDIT_RULES`
+- `REDDIT_RETRIEVE_REDDIT_POST`
+- `REDDIT_POST_REDDIT_COMMENT`
+
+If you only see `COMPOSIO_MANAGE_CONNECTIONS`, `COMPOSIO_MULTI_EXECUTE_TOOL`, and similar entries, you are likely running an older bot process.
 
 ### Problem 7: Duplicate replies
 
 Cause:
 
-- more than one bot process is running
+- more than one Slack responder is running for the same app
+
+Common causes:
+
+- more than one `slack_bot.py` process is running
+- Hermes Slack gateway is also running against the same Slack app
 
 Fix for custom `slack_bot.py`:
 
 ```bash
+pkill -f "hermes_cli.main gateway run"
 pkill -f slack_bot.py
 uv run python slack_bot.py
 ```
 
-Fix for Hermes:
+If you intentionally want Hermes gateway too, use a different Slack app for it.
+
+### Problem 8: Raw lines like `browser_navigate` or `skills_list` appear in Slack
+
+Cause:
+
+- Hermes gateway or another Slack responder is still replying directly
+- an older bot process is still running
+
+Fix:
 
 ```bash
-uv run hermes gateway restart
+pkill -f "hermes_cli.main gateway run"
+pkill -f slack_bot.py
+uv run python slack_bot.py
 ```
+
+### Problem 9: Bot starts but says you are not allowed yet
+
+Cause:
+
+- `SLACK_ALLOWED_USERS` is blank and no Slack admin has claimed access yet
+- or you are not in the current allowlist
+
+Fix:
+
+1. open a DM with the bot
+2. if this is the first setup, send `admin claim`
+3. if an admin already exists, ask them to DM the bot with `allowlist add <@your_name>`
+4. send `allowlist list` in DM to verify who is allowed
 
 ## Final Checklist
 
@@ -801,6 +992,8 @@ Before calling your Slack bot fully ready, confirm all of these:
 13. DM test works
 14. Public channel mention test works
 15. Private channel mention test works
+16. `tools` shows real Reddit tools, not only generic Composio meta-tools
+17. `hermes: rewrite this in simpler language` works without duplicate replies
 
 ## Which Route Should You Use?
 
@@ -813,6 +1006,7 @@ Use `Hermes Gateway` if:
 Use `slack_bot.py` if:
 
 - you want direct Composio integration in Python
+- you want Hermes available as the internal first-pass orchestrator without running a second Slack responder
 - you want a Reddit-specific Slack bot
 - you want behavior closer to your `discord_bot.py`
 - you want more control over how the Slack bot works
