@@ -22,19 +22,21 @@ from .config import (
     SHARED_COMPOSIO_USER_ID,
     SHARED_CONNECTED_ACCOUNT_ID,
 )
-from .document_access import build_direct_document_reply
-from .exports import create_excel_report, extract_excel_payload
-from .formatting import post_chunked_message, sanitize_agent_message, strip_bot_mention, upload_excel_report
+from .document_access import build_direct_document_reply, is_direct_document_flow
+from .exports import create_export_file, export_success_message, export_title, extract_export_payload
+from .formatting import post_chunked_message, sanitize_agent_message, strip_bot_mention, upload_generated_file
 from .hermes_bridge import run_hermes_orchestrator, run_hermes_task
 from .progress import (
     add_reaction,
     cycle_progress_message,
+    ensure_progress_visibility,
     delete_progress_message,
     post_progress_message,
     remove_reaction,
     update_progress_message,
 )
 from .prompts import (
+    build_fast_chat_reply,
     build_hermes_orchestrator_prompt,
     build_hermes_task_prompt,
     build_prompt_document_context,
@@ -124,6 +126,11 @@ def build_app() -> AsyncApp:
             )
             return
 
+        fast_reply = build_fast_chat_reply(text)
+        if fast_reply:
+            await post_chunked_message(client, channel, fast_reply, thread_ts)
+            return
+
         await add_reaction(client, channel, timestamp, "eyes")
         progress_started_at = monotonic()
         progress_ts = await post_progress_message(
@@ -158,6 +165,15 @@ def build_app() -> AsyncApp:
                 thread_ts=thread_ts,
                 is_dm=is_dm,
             )
+            if is_direct_document_flow(text):
+                await update_progress_message(
+                    client,
+                    channel,
+                    progress_ts,
+                    stage_index=2,
+                    started_at=progress_started_at,
+                    status="Reading document",
+                )
             response_text = await build_direct_document_reply(
                 text,
                 context_text=slack_context,
@@ -183,7 +199,7 @@ def build_app() -> AsyncApp:
                     progress_ts,
                     stage_index=2,
                     started_at=progress_started_at,
-                    status="Consulting Hermes" if HERMES_ENABLED else "Researching",
+                    status="Planning next step" if HERMES_ENABLED else "Researching",
                 )
                 progress_stop_event = asyncio.Event()
                 progress_task = asyncio.create_task(
@@ -264,13 +280,14 @@ def build_app() -> AsyncApp:
                 status="Generating",
                 detail="Formatting the final Slack reply and checking for exports.",
             )
-            message_text, export_payload = extract_excel_payload(response_text)
+            message_text, export_payload = extract_export_payload(response_text)
             message_text = sanitize_agent_message(message_text)
 
             if message_text:
                 await post_chunked_message(client, channel, message_text, thread_ts)
 
             if export_payload:
+                export_kind = str(export_payload.get("export_type") or "xlsx").strip().lower()
                 await update_progress_message(
                     client,
                     channel,
@@ -278,11 +295,15 @@ def build_app() -> AsyncApp:
                     stage_index=3,
                     started_at=progress_started_at,
                     status="Generating",
-                    detail="Preparing the Excel report and uploading it to Slack.",
+                    detail=(
+                        "Preparing the document file and uploading it to Slack."
+                        if export_kind == "docx"
+                        else "Preparing the Excel report and uploading it to Slack."
+                    ),
                 )
-                file_path = create_excel_report(export_payload)
-                title = str(export_payload.get("workbook_name") or "reddit_report")
-                await upload_excel_report(
+                file_path = create_export_file(export_payload)
+                title = export_title(export_payload)
+                await upload_generated_file(
                     client,
                     channel,
                     file_path,
@@ -294,10 +315,11 @@ def build_app() -> AsyncApp:
                     await post_chunked_message(
                         client,
                         channel,
-                        "Excel report created and uploaded.",
+                        export_success_message(export_payload),
                         thread_ts,
                     )
 
+            await ensure_progress_visibility(progress_started_at)
             await delete_progress_message(client, channel, progress_ts)
             await remove_reaction(client, channel, timestamp, "eyes")
             await add_reaction(client, channel, timestamp, "white_check_mark")
@@ -309,6 +331,7 @@ def build_app() -> AsyncApp:
                     await progress_task
                 except Exception:
                     pass
+            await ensure_progress_visibility(progress_started_at)
             await delete_progress_message(client, channel, progress_ts)
             await remove_reaction(client, channel, timestamp, "eyes")
             await add_reaction(client, channel, timestamp, "x")

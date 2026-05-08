@@ -1,12 +1,8 @@
 import asyncio
-import csv
-import io
 import json
 import re
-from urllib.parse import parse_qs, urlparse
 
-import aiohttp
-from sheet_ingest.python_sheet_reader import (
+from sheet_document_ingest import (
     SheetAccessError,
     SheetAnalysisError,
     SheetEmptyError,
@@ -15,25 +11,23 @@ from sheet_ingest.python_sheet_reader import (
     normalize_source_url,
 )
 
-GOOGLE_SHEETS_URL_RE = re.compile(
-    r"https?://docs\.google\.com/spreadsheets/[^\s>]+",
-    re.IGNORECASE,
-)
 URL_RE = re.compile(r"https?://[^\s<>]+", re.IGNORECASE)
-GOOGLE_SHEET_ID_RE = re.compile(
-    r"/spreadsheets/d/([a-zA-Z0-9\-_]+)",
-    re.IGNORECASE,
-)
-DOCUMENT_FETCH_TIMEOUT_SECONDS = 20
-DOCUMENT_PREVIEW_ROW_LIMIT = 12
-DOCUMENT_PREVIEW_COL_LIMIT = 12
-DOCUMENT_PREVIEW_CHAR_LIMIT = 5000
 DIRECT_PREVIEW_ROW_LIMIT = 3
 DIRECT_PREVIEW_COL_LIMIT = 6
 DIRECT_TYPE_LIMIT = 8
 DIRECT_EXPORT_KEYWORDS = (
     "excel",
     "xlsx",
+    "docx",
+    "word file",
+    "doc file",
+    "document file",
+    "new document file",
+    "new docs file",
+    "generate doc",
+    "generate docs",
+    "create doc",
+    "create docs",
     "new excel file",
     "export",
     "download file",
@@ -67,16 +61,8 @@ REDDIT_HINTS = (
 )
 
 
-def _extract_google_sheet_url(text: str) -> str | None:
-    """Return the first Google Sheets URL found in the Slack message."""
-    match = GOOGLE_SHEETS_URL_RE.search(text or "")
-    if not match:
-        return None
-    return match.group(0).rstrip(").,]>")
-
-
 def _extract_supported_document_url(text: str) -> str | None:
-    """Return the first supported Google Sheet, CSV, or XLSX URL."""
+    """Return the first supported sheet or document URL."""
     for match in URL_RE.finditer(text or ""):
         candidate = match.group(0).rstrip(").,]>")
         try:
@@ -118,74 +104,30 @@ def _is_document_export_request(text: str) -> bool:
     return any(keyword in normalized for keyword in DIRECT_EXPORT_KEYWORDS)
 
 
-def _extract_google_sheet_export_url(url: str) -> str | None:
-    """Convert a Google Sheets edit/view URL into a CSV export URL."""
-    match = GOOGLE_SHEET_ID_RE.search(url)
-    if not match:
-        return None
+def is_direct_document_flow(text: str) -> bool:
+    """Return whether the message should use the direct document flow."""
+    return _is_direct_document_request(text) or _is_document_export_request(text)
 
-    parsed = urlparse(url)
-    query = parse_qs(parsed.query)
-    fragment = parse_qs(parsed.fragment)
-    gid = (
-        (query.get("gid") or fragment.get("gid") or ["0"])[0].strip()
-        or "0"
+
+def _prefers_excel_export(text: str) -> bool:
+    normalized = re.sub(r"\s+", " ", (text or "").lower()).strip()
+    return any(keyword in normalized for keyword in ("excel", "xlsx", "spreadsheet"))
+
+
+def _prefers_docx_export(text: str) -> bool:
+    normalized = re.sub(r"\s+", " ", (text or "").lower()).strip()
+    return any(
+        keyword in normalized
+        for keyword in (
+            "docx",
+            "word",
+            "doc file",
+            "document file",
+            "docs file",
+            "generate doc",
+            "create doc",
+        )
     )
-    sheet_id = match.group(1)
-    return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
-
-
-def _looks_like_html(text: str) -> bool:
-    """Detect HTML fallback pages such as auth or interstitial screens."""
-    sample = text.lstrip().lower()
-    return sample.startswith("<!doctype html") or sample.startswith("<html")
-
-
-def _clip_cell(value: str) -> str:
-    """Keep cell values compact so prompt previews stay readable."""
-    compact = re.sub(r"\s+", " ", value or "").strip()
-    if len(compact) <= 80:
-        return compact
-    return compact[:77].rstrip() + "..."
-
-
-def _build_csv_prompt_context(source_url: str, csv_text: str) -> str | None:
-    """Turn a CSV export into a compact prompt block."""
-    try:
-        reader = csv.reader(io.StringIO(csv_text))
-        rows = []
-        for row in reader:
-            rows.append(row[:DOCUMENT_PREVIEW_COL_LIMIT])
-            if len(rows) >= DOCUMENT_PREVIEW_ROW_LIMIT + 1:
-                break
-    except Exception:
-        return None
-
-    if not rows:
-        return None
-
-    header = [_clip_cell(value) for value in rows[0]]
-    data_rows = rows[1:]
-    preview_lines = [
-        "Document access result: Public Google Sheet fetch succeeded.",
-        "Use the fetched sheet contents below instead of saying access is blocked.",
-        f"Source URL: {source_url}",
-        f"Detected format: Google Sheet exported as CSV",
-        f"Header columns: {' | '.join(header) if header else '(no header detected)'}",
-        "Preview rows:",
-    ]
-
-    if not data_rows:
-        preview_lines.append("(no data rows found)")
-    else:
-        for index, row in enumerate(data_rows, start=1):
-            clipped_row = [_clip_cell(value) for value in row]
-            preview_lines.append(f"{index}. {' | '.join(clipped_row)}")
-
-    context = "\n".join(preview_lines).strip()
-    if len(context) <= DOCUMENT_PREVIEW_CHAR_LIMIT:
-        return context
-    return context[: DOCUMENT_PREVIEW_CHAR_LIMIT - 3].rstrip() + "..."
 
 
 def _clip_value(value: object, limit: int = 80) -> str:
@@ -198,9 +140,33 @@ def _clip_value(value: object, limit: int = 80) -> str:
 def _source_kind_label(source_kind: str) -> str:
     return {
         "google_sheet": "Google Sheet",
+        "google_doc": "Google Doc",
         "csv": "CSV file",
         "excel": "Excel file",
+        "docx": "Word document",
+        "text_document": "Text document",
     }.get(source_kind, "Document")
+
+
+def _source_unit_label(source_kind: str) -> str:
+    return {
+        "google_doc": "Paragraphs Analyzed",
+        "docx": "Paragraphs Analyzed",
+        "text_document": "Paragraphs Analyzed",
+    }.get(source_kind, "Rows Analyzed")
+
+
+def _is_text_document_source(source_kind: str) -> bool:
+    return source_kind in {"google_doc", "docx", "text_document"}
+
+
+def _doc_paragraphs(rows: list[dict[str, object]]) -> list[str]:
+    paragraphs: list[str] = []
+    for row in rows:
+        content = str(row.get("content") or "").strip()
+        if content:
+            paragraphs.append(content)
+    return paragraphs
 
 
 def _render_sample_row(columns: list[str], row: dict[str, object]) -> str:
@@ -215,6 +181,10 @@ def _render_sample_row(columns: list[str], row: dict[str, object]) -> str:
 
 def _build_direct_document_message(result: dict[str, object]) -> str:
     source = dict(result.get("source") or {})
+    source_kind = str(source.get("source_kind") or "document")
+    if _is_text_document_source(source_kind):
+        return _build_text_document_message(result)
+
     columns = [str(column) for column in (result.get("columns") or [])]
     rows = list(result.get("rows") or [])
     summary = dict(result.get("summary") or {})
@@ -229,8 +199,8 @@ def _build_direct_document_message(result: dict[str, object]) -> str:
         "Document Read",
         "",
         f"*Status:* Read successfully",
-        f"*Source:* {_source_kind_label(str(source.get('source_kind') or 'document'))}",
-        f"*Rows Analyzed:* {row_count}",
+        f"*Source:* {_source_kind_label(source_kind)}",
+        f"*{_source_unit_label(source_kind)}:* {row_count}",
         f"*Columns:* {len(columns)}",
         "",
         "*Summary*",
@@ -283,13 +253,61 @@ def _build_direct_document_message(result: dict[str, object]) -> str:
     return "\n".join(lines).strip()
 
 
+def _build_text_document_message(result: dict[str, object]) -> str:
+    source = dict(result.get("source") or {})
+    rows = list(result.get("rows") or [])
+    summary = dict(result.get("summary") or {})
+    insights = dict(result.get("insights") or {})
+    patterns = [str(pattern) for pattern in (insights.get("patterns") or []) if str(pattern).strip()]
+    paragraphs = _doc_paragraphs(rows)
+    paragraph_count = int(summary.get("row_count") or len(paragraphs))
+    total_words = sum(int(row.get("word_count") or 0) for row in rows)
+    truncated = bool(summary.get("truncated"))
+    source_kind = str(source.get("source_kind") or "document")
+
+    lines = [
+        "Document Read",
+        "",
+        f"*Status:* Read successfully",
+        f"*Source:* {_source_kind_label(source_kind)}",
+        f"*Paragraphs:* {paragraph_count}",
+        f"*Words:* {total_words}",
+        "",
+        "*Summary*",
+    ]
+
+    if paragraphs:
+        preview = _clip_value(paragraphs[0], limit=220)
+        lines.append(f"- Opening text: {preview}")
+    if len(paragraphs) > 1:
+        lines.append(f"- The document contains {paragraph_count} readable paragraph(s).")
+    if patterns:
+        lines.append(f"- {patterns[0]}")
+    if truncated:
+        lines.append("- The analysis was truncated before reading the full document.")
+
+    lines.extend(["", "*Text Preview*"])
+    if paragraphs:
+        for index, paragraph in enumerate(paragraphs[:DIRECT_PREVIEW_ROW_LIMIT], start=1):
+            lines.append(f"{index}. {_clip_value(paragraph, limit=320)}")
+    else:
+        lines.append("- No readable paragraphs found.")
+
+    return "\n".join(lines).strip()
+
+
 def _build_excel_payload(result: dict[str, object]) -> dict[str, object]:
     source = dict(result.get("source") or {})
     columns = [str(column) for column in (result.get("columns") or [])]
     rows = list(result.get("rows") or [])
     summary = dict(result.get("summary") or {})
     workbook_name = (
-        str(source.get("spreadsheet_id") or source.get("source_kind") or "document_export")
+        str(
+            source.get("spreadsheet_id")
+            or source.get("document_id")
+            or source.get("source_kind")
+            or "document_export"
+        )
         .strip()
         .replace(" ", "_")
     )
@@ -315,6 +333,40 @@ def _build_excel_export_response(result: dict[str, object]) -> str:
         "*Status:* Full document data prepared for Excel export.\n"
         f"*Rows:* {len(payload.get('rows') or [])}\n"
         f"*Columns:* {len(payload.get('columns') or [])}\n\n"
+        f"```json\n{json.dumps(payload, ensure_ascii=True)}\n```"
+    )
+
+
+def _build_docx_payload(result: dict[str, object]) -> dict[str, object]:
+    source = dict(result.get("source") or {})
+    rows = list(result.get("rows") or [])
+    summary = dict(result.get("summary") or {})
+    document_name = (
+        str(source.get("document_id") or source.get("source_kind") or "document_export")
+        .strip()
+        .replace(" ", "_")
+    )
+    title = str(source.get("document_id") or "Document Export").strip() or "Document Export"
+    paragraphs = _doc_paragraphs(rows)
+    summary_text = (
+        f"Exported {_source_kind_label(str(source.get('source_kind') or 'document')).lower()} "
+        f"with {int(summary.get('row_count') or 0)} paragraph(s)."
+    )
+    return {
+        "export_type": "docx",
+        "document_name": document_name,
+        "title": title,
+        "summary": summary_text,
+        "paragraphs": paragraphs,
+    }
+
+
+def _build_docx_export_response(result: dict[str, object]) -> str:
+    payload = _build_docx_payload(result)
+    return (
+        "Document Export Ready\n\n"
+        "*Status:* Full document text prepared for DOCX export.\n"
+        f"*Paragraphs:* {len(payload.get('paragraphs') or [])}\n\n"
         f"```json\n{json.dumps(payload, ensure_ascii=True)}\n```"
     )
 
@@ -348,7 +400,7 @@ async def build_direct_document_reply(
             "Please open the correct tab and resend that exact link."
         )
     except SheetEmptyError:
-        return "I could read the document, but it does not contain any rows yet."
+        return "I could read the document, but it does not contain any readable content yet."
     except SheetAnalysisError as exc:
         return (
             "I found the document link, but I could not parse it cleanly.\n\n"
@@ -356,40 +408,46 @@ async def build_direct_document_reply(
         )
 
     if _is_document_export_request(text):
+        source_kind = str(dict(result.get("source") or {}).get("source_kind") or "")
+        if _is_text_document_source(source_kind) and (
+            _prefers_docx_export(text) or not _prefers_excel_export(text)
+        ):
+            return _build_docx_export_response(result)
         return _build_excel_export_response(result)
     return _build_direct_document_message(result)
 
 
 async def build_document_prompt_context(text: str) -> str:
     """Fetch prompt-ready context for public document URLs when supported."""
-    source_url = _extract_google_sheet_url(text)
+    source_url = _extract_supported_document_url(text)
     if not source_url:
         return ""
 
-    export_url = _extract_google_sheet_export_url(source_url)
-    if not export_url:
-        return ""
-
-    timeout = aiohttp.ClientTimeout(total=DOCUMENT_FETCH_TIMEOUT_SECONDS)
-    headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; SlackRedditAgent/1.0)",
-        "Accept": "text/csv,text/plain;q=0.9,*/*;q=0.8",
-    }
-
     try:
-        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
-            async with session.get(export_url, allow_redirects=True) as response:
-                if response.status >= 400:
-                    return ""
-                body = await response.text(errors="replace")
-                content_type = (response.headers.get("content-type") or "").lower()
+        result = await asyncio.to_thread(analyze_sheet, source_url, max_rows=12)
     except Exception:
         return ""
 
-    if not body or _looks_like_html(body):
-        return ""
+    source = dict(result.get("source") or {})
+    columns = [str(column) for column in (result.get("columns") or [])]
+    rows = list(result.get("rows") or [])
+    summary = dict(result.get("summary") or {})
+    source_kind = str(source.get("source_kind") or "document")
 
-    if "text/csv" not in content_type and "," not in body:
-        return ""
+    lines = [
+        "Document access result: Public document fetch succeeded.",
+        "Use the fetched document contents below instead of saying access is blocked.",
+        f"Source URL: {source_url}",
+        f"Detected format: {_source_kind_label(source_kind)}",
+        f"Rows captured: {int(summary.get('row_count') or 0)}",
+        f"Columns: {', '.join(columns[:DIRECT_TYPE_LIMIT]) if columns else '(none)'}",
+        "Preview rows:",
+    ]
 
-    return _build_csv_prompt_context(source_url, body) or ""
+    if not rows:
+        lines.append("(no rows found)")
+    else:
+        for index, row in enumerate(rows[:DIRECT_PREVIEW_ROW_LIMIT], start=1):
+            lines.append(f"{index}. {_render_sample_row(columns, row)}")
+
+    return "\n".join(lines).strip()

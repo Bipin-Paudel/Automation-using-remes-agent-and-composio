@@ -2,6 +2,7 @@ import asyncio
 from time import monotonic
 
 from .config import (
+    SLACK_PROGRESS_MIN_VISIBLE_SECONDS,
     SLACK_PROGRESS_STAGE_HOLD_SECONDS,
     SLACK_PROGRESS_STAGES,
     SLACK_PROGRESS_UPDATE_SECONDS,
@@ -136,6 +137,17 @@ async def delete_progress_message(
         await client.chat_delete(channel=channel, ts=progress_ts)
     except Exception:
         return
+
+
+async def ensure_progress_visibility(
+    started_at: float,
+    *,
+    minimum_seconds: int = SLACK_PROGRESS_MIN_VISIBLE_SECONDS,
+) -> None:
+    """Keep the temporary progress message visible long enough to be noticed."""
+    remaining = float(minimum_seconds) - (monotonic() - started_at)
+    if remaining > 0:
+        await asyncio.sleep(remaining)
 
 
 async def cycle_progress_message(

@@ -51,23 +51,30 @@ def workflow_hint(text: str) -> tuple[str, str]:
     """Infer the likely Reddit workflow and response requirements."""
     normalized = text.lower().strip()
     has_reddit_url = bool(re.search(r"https?://(?:www\.)?reddit\.com/\S+", normalized))
-    has_google_sheets_url = bool(
-        re.search(r"https?://docs\.google\.com/spreadsheets/\S+", normalized)
+    has_google_workspace_doc_url = bool(
+        re.search(r"https?://docs\.google\.com/(?:spreadsheets|document)/\S+", normalized)
     )
 
-    if has_google_sheets_url or any(
+    if has_google_workspace_doc_url or any(
         phrase in normalized
         for phrase in (
             "google sheet",
             "google sheets",
+            "google doc",
+            "google docs",
             "spreadsheet link",
+            "document link",
             "sheet link",
             "read this sheet",
             "read this spreadsheet",
+            "read this doc",
+            "read this document",
             "read this file",
             "open this file",
             "summarize this sheet",
             "summarize this spreadsheet",
+            "summarize this doc",
+            "summarize this document",
             "summarize this file",
         )
     ):
@@ -118,6 +125,31 @@ def workflow_hint(text: str) -> tuple[str, str]:
     )
 
 
+def build_fast_chat_reply(text: str) -> str | None:
+    """Return an instant local reply for simple casual Slack messages."""
+    normalized = re.sub(r"\s+", " ", text.lower()).strip()
+
+    if re.match(r"^(hi|hello|hey)\b", normalized):
+        return (
+            "Hello! I can help with Reddit research, document reading, drafting, and exports. "
+            "Tell me what you want to work on."
+        )
+
+    if re.match(r"^thank(s| you)\b", normalized):
+        return "You're welcome. If you want, send the next task and I'll keep going."
+
+    if re.match(r"^(ok|okay|got it)\b", normalized):
+        return "Sounds good. Send the next task whenever you’re ready."
+
+    if re.match(r"^can you help\b", normalized) or re.match(r"^help me\b", normalized):
+        return (
+            "Yes. I can help with Reddit tasks, Google Sheets, Google Docs, text summaries, "
+            "and file exports. Send the task or paste the link."
+        )
+
+    return None
+
+
 def strip_engine_prefix(text: str) -> tuple[str | None, str]:
     """Detect and remove explicit engine prefixes from a Slack message."""
     normalized = text.strip()
@@ -137,14 +169,22 @@ def _is_general_task(text: str) -> bool:
     normalized = text.lower().strip()
     document_markers = (
         "docs.google.com/spreadsheets",
+        "docs.google.com/document",
         "google sheet",
         "google sheets",
+        "google doc",
+        "google docs",
         "spreadsheet link",
+        "document link",
         "sheet link",
         "read this sheet",
         "read this spreadsheet",
+        "read this doc",
+        "read this document",
         "read this file",
         "open this file",
+        "summarize this doc",
+        "summarize this document",
         "summarize this spreadsheet",
         "summarize this file",
     )

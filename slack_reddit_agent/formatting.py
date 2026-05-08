@@ -355,14 +355,14 @@ async def post_chunked_message(
         await client.chat_postMessage(**payload)
 
 
-async def upload_excel_report(
+async def upload_generated_file(
     client,
     channel: str,
     file_path: Path,
     title: str,
     thread_ts: str | None = None,
 ) -> None:
-    """Upload an Excel file into Slack."""
+    """Upload a generated file into Slack."""
     payload: dict[str, Any] = {
         "channel": channel,
         "file": str(file_path),
@@ -373,3 +373,14 @@ async def upload_excel_report(
         payload["thread_ts"] = thread_ts
 
     await client.files_upload_v2(**payload)
+
+
+async def upload_excel_report(
+    client,
+    channel: str,
+    file_path: Path,
+    title: str,
+    thread_ts: str | None = None,
+) -> None:
+    """Backward-compatible wrapper for Excel uploads."""
+    await upload_generated_file(client, channel, file_path, title, thread_ts)
