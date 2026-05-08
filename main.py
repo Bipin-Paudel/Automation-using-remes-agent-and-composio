@@ -1,9 +1,13 @@
+from pathlib import Path
+
 from dotenv import load_dotenv
 from composio import Composio
 from agents import Agent, Runner, SQLiteSession
 from composio_openai_agents import OpenAIAgentsProvider
 
-load_dotenv()
+ENV_FILE = Path(__file__).resolve().parent / ".env"
+
+load_dotenv(ENV_FILE)
 
 # Initialize Composio with OpenAI Agents provider
 composio = Composio(provider=OpenAIAgentsProvider())

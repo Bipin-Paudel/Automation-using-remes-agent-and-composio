@@ -49,7 +49,7 @@ You already have:
 
 ## Step 2: Update Your Environment Variables
 
-Edit `/Users/bipinpaudel/work/automation/.env` and add:
+Edit the project `.env` file and add:
 
 ```
 DISCORD_BOT_TOKEN=your_bot_token_here
@@ -57,12 +57,14 @@ DISCORD_BOT_TOKEN=your_bot_token_here
 
 Replace `your_bot_token_here` with the token you copied in Step 1.2
 
+If you are starting from scratch, copy `.env.discord.example` to `.env` first.
+
 ## Step 3: Install Dependencies
 
 Run in your terminal:
 
 ```bash
-cd /Users/bipinpaudel/work/automation
+cd ~/path/to/automation
 uv sync
 ```
 
@@ -75,7 +77,7 @@ pip install discord.py aiohttp
 ## Step 4: Run Your Discord Bot
 
 ```bash
-cd /Users/bipinpaudel/work/automation
+cd ~/path/to/automation
 python discord_bot.py
 ```
 

@@ -1,19 +1,22 @@
 import os
+from pathlib import Path
 
 from composio import Composio
 from composio_openai_agents import OpenAIAgentsProvider
 from dotenv import load_dotenv
 
+ENV_FILE = Path(__file__).resolve().parent / ".env"
+
 
 def main() -> None:
-    load_dotenv(dotenv_path=".env")
-
+    load_dotenv(ENV_FILE)
 
     shared_user_id = os.getenv("COMPOSIO_SHARED_USER_ID", "").strip()
     if not shared_user_id:
         raise RuntimeError(
-            "COMPOSIO_SHARED_USER_ID is missing in .env. "
-            "Set it first, for example: COMPOSIO_SHARED_USER_ID=skinpal_reddit_shared"
+            "COMPOSIO_SHARED_USER_ID is missing from .env. "
+            "Set it first, for example: COMPOSIO_SHARED_USER_ID=skinpal_reddit_shared. "
+            "You can start from .env.example or .env.slack.example."
         )
 
     composio = Composio(provider=OpenAIAgentsProvider())

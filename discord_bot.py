@@ -1,6 +1,7 @@
 import os
 import asyncio
 import atexit
+from pathlib import Path
 from typing import Any, Awaitable, Callable
 import discord
 from discord.ext import commands
@@ -9,8 +10,10 @@ from composio import Composio
 from agents import Agent, Runner, SQLiteSession
 from composio_openai_agents import OpenAIAgentsProvider
 
-# Load environment variables
-load_dotenv()
+ENV_FILE = Path(__file__).resolve().parent / ".env"
+
+# Load environment variables from the repository root.
+load_dotenv(ENV_FILE)
 
 # Initialize Composio
 composio = Composio(provider=OpenAIAgentsProvider())

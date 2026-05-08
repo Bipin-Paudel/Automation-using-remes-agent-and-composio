@@ -27,10 +27,12 @@ SIGN_IN_MARKERS = (
     "you need access",
     "accounts.google.com",
 )
+SHEET_SOURCE_KINDS = {"google_sheet", "csv", "excel"}
+DOCUMENT_SOURCE_KINDS = {"google_doc", "text_document", "docx"}
 
 
 class SheetAnalysisError(Exception):
-    """Base exception for sheet ingestion failures."""
+    """Base exception for sheet and document ingestion failures."""
 
 
 class SheetAccessError(SheetAnalysisError):
@@ -42,7 +44,7 @@ class SheetGidError(SheetAnalysisError):
 
 
 class SheetEmptyError(SheetAnalysisError):
-    """Raised when the sheet exists but contains no rows or columns."""
+    """Raised when the source exists but contains no readable data."""
 
 
 @dataclass(slots=True)
@@ -52,6 +54,7 @@ class NormalizedSource:
     source_kind: str
     source_format: str
     spreadsheet_id: str | None = None
+    document_id: str | None = None
     gid: str | None = None
 
 
@@ -61,73 +64,76 @@ class ParsedFrame:
     sheet_name: str | int | None = None
 
 
+def is_sheet_source_kind(source_kind: str) -> bool:
+    return source_kind in SHEET_SOURCE_KINDS
+
+
+def is_document_source_kind(source_kind: str) -> bool:
+    return source_kind in DOCUMENT_SOURCE_KINDS
+
+
 def _validate_url(url: str) -> str:
     parsed = urlparse((url or "").strip())
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise SheetAnalysisError("Invalid URL. Expected an http(s) Google Sheets, CSV, or .xlsx link.")
+        raise SheetAnalysisError(
+            "Invalid URL. Expected an http(s) Google Sheets, Google Docs, CSV, text, .docx, or .xlsx link."
+        )
     return url.strip()
 
 
-def _normalize_google_sheet_url(url: str, gid: str | None = None) -> NormalizedSource:
-    match = GOOGLE_SHEET_ID_RE.search(url)
-    if not match:
-        raise SheetAnalysisError("Invalid Google Sheets URL.")
-
-    parsed = urlparse(url)
-    query = parse_qs(parsed.query)
-    fragment = parse_qs(parsed.fragment)
-    selected_gid = (
-        str(gid).strip()
-        if gid is not None
-        else ((query.get("gid") or fragment.get("gid") or [None])[0])
-    )
-    spreadsheet_id = match.group(1)
-    export_url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export?format=csv"
-    if selected_gid:
-        export_url = f"{export_url}&gid={selected_gid}"
-
-    return NormalizedSource(
-        original_url=url,
-        fetch_url=export_url,
-        source_kind="google_sheet",
-        source_format="csv",
-        spreadsheet_id=spreadsheet_id,
-        gid=selected_gid,
-    )
-
-
-def normalize_source_url(
+def match_sheet_source(
     url: str,
     *,
     gid: str | None = None,
-) -> NormalizedSource:
-    """Normalize supported Google Sheets / CSV / XLSX URLs into a fetchable source."""
-    clean_url = _validate_url(url)
-    parsed = urlparse(clean_url)
+) -> NormalizedSource | None:
+    """Return a normalized sheet-like source when the URL matches one."""
+    parsed = urlparse(url)
     hostname = parsed.netloc.lower()
     path = parsed.path.lower()
     query = parse_qs(parsed.query)
 
     if hostname == "docs.google.com" and "/spreadsheets/" in path:
-        return _normalize_google_sheet_url(clean_url, gid=gid)
+        match = GOOGLE_SHEET_ID_RE.search(url)
+        if not match:
+            raise SheetAnalysisError("Invalid Google Sheets URL.")
+
+        fragment = parse_qs(parsed.fragment)
+        selected_gid = (
+            str(gid).strip()
+            if gid is not None
+            else ((query.get("gid") or fragment.get("gid") or [None])[0])
+        )
+        spreadsheet_id = match.group(1)
+        export_url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export?format=csv"
+        if selected_gid:
+            export_url = f"{export_url}&gid={selected_gid}"
+
+        return NormalizedSource(
+            original_url=url,
+            fetch_url=export_url,
+            source_kind="google_sheet",
+            source_format="csv",
+            spreadsheet_id=spreadsheet_id,
+            gid=selected_gid,
+        )
 
     if path.endswith(".xlsx"):
         return NormalizedSource(
-            original_url=clean_url,
-            fetch_url=clean_url,
+            original_url=url,
+            fetch_url=url,
             source_kind="excel",
             source_format="xlsx",
         )
 
     if path.endswith(".csv") or query.get("format") == ["csv"]:
         return NormalizedSource(
-            original_url=clean_url,
-            fetch_url=clean_url,
+            original_url=url,
+            fetch_url=url,
             source_kind="csv",
             source_format="csv",
         )
 
-    raise SheetAnalysisError("Unsupported URL. Use a Google Sheets link, CSV export link, or .xlsx file URL.")
+    return None
 
 
 def _download_source(
@@ -142,7 +148,7 @@ def _download_source(
             source.fetch_url,
             timeout=timeout_seconds,
             stream=True,
-            headers={"User-Agent": "sheet-ingest/1.0"},
+            headers={"User-Agent": "sheet-document-ingest/1.0"},
         )
     except requests.RequestException as exc:
         raise SheetAnalysisError(f"Failed to fetch the source URL: {exc}") from exc
@@ -150,7 +156,7 @@ def _download_source(
         if response.status_code == 400 and source.source_kind == "google_sheet" and source.gid:
             raise SheetGidError(f"Wrong sheet gid: {source.gid}")
 
-        if response.status_code in {401, 403} and source.source_kind == "google_sheet":
+        if response.status_code in {401, 403} and source.source_kind in {"google_sheet", "google_doc"}:
             raise SheetAccessError("Please enable 'Anyone with the link' access")
 
         if response.status_code >= 400:
@@ -170,16 +176,20 @@ def _download_source(
         content_type = (response.headers.get("content-type") or "").lower()
         response_text = payload[:8192].decode("utf-8", errors="ignore").lower()
 
-        if source.source_kind == "google_sheet" and (
+        if source.source_kind in {"google_sheet", "google_doc"} and (
             "<html" in response_text or any(marker in response_text for marker in SIGN_IN_MARKERS)
         ):
             if any(marker in response_text for marker in SIGN_IN_MARKERS):
                 raise SheetAccessError("Please enable 'Anyone with the link' access")
             if source.gid:
                 raise SheetGidError(f"Wrong sheet gid: {source.gid}")
+            if source.source_kind == "google_doc":
+                raise SheetAnalysisError("Google Doc export failed. Verify the link and try again.")
             raise SheetAnalysisError("Google Sheet export failed. Verify the link and try again.")
 
-        if source.source_kind == "google_sheet" and not payload:
+        if source.source_kind in {"google_sheet", "google_doc"} and not payload:
+            if source.source_kind == "google_doc":
+                raise SheetEmptyError("The Google Doc export returned no data.")
             raise SheetEmptyError("The Google Sheet export returned no data.")
 
         return payload, content_type, str(response.url)
@@ -281,7 +291,11 @@ def _normalize_date_text(value: str) -> str:
     compact = re.sub(r"\s+", " ", value).strip()
     normalized = re.sub(r"(?<=\d)(st|nd|rd|th)\b", "", compact, flags=re.IGNORECASE)
     has_month = bool(
-        re.search(r"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\b", normalized, re.IGNORECASE)
+        re.search(
+            r"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\b",
+            normalized,
+            re.IGNORECASE,
+        )
     )
     has_year = bool(re.search(r"\b\d{4}\b", normalized))
     has_day = bool(re.search(r"\b\d{1,2}\b", normalized))
@@ -324,7 +338,7 @@ def _frame_to_records(df: pd.DataFrame) -> tuple[list[str], list[dict[str, Any]]
     clean_df = df.copy()
     clean_df.columns = [str(column) for column in clean_df.columns]
     columns = list(clean_df.columns)
-    rows = []
+    rows: list[dict[str, Any]] = []
     for _, row in clean_df.iterrows():
         rows.append({column: _to_json_value(row[column]) for column in columns})
     return columns, rows
@@ -344,11 +358,11 @@ def _build_summary(df: pd.DataFrame, *, truncated: bool) -> dict[str, Any]:
 
 
 def _build_insights(df: pd.DataFrame) -> dict[str, Any]:
-    missing_values = {}
-    numeric_columns = {}
-    categorical_columns = {}
-    date_columns = {}
-    patterns = []
+    missing_values: dict[str, Any] = {}
+    numeric_columns: dict[str, Any] = {}
+    categorical_columns: dict[str, Any] = {}
+    date_columns: dict[str, Any] = {}
+    patterns: list[str] = []
 
     if df.empty:
         return {
@@ -432,34 +446,14 @@ def _build_insights(df: pd.DataFrame) -> dict[str, Any]:
     }
 
 
-def analyze_sheet(
-    url: str,
+def _build_result(
+    source: NormalizedSource,
+    parsed: ParsedFrame,
     *,
-    gid: str | None = None,
-    sheet_name: str | int | None = None,
-    max_rows: int | None = None,
-    timeout_seconds: int = 30,
+    content_type: str,
+    final_url: str,
+    validated_max_rows: int | None,
 ) -> dict[str, Any]:
-    """Fetch, parse, and analyze a Google Sheet / CSV / Excel URL."""
-    validated_max_rows = _validate_max_rows(max_rows)
-    source = normalize_source_url(url, gid=gid)
-    payload, content_type, final_url = _download_source(
-        source,
-        timeout_seconds=timeout_seconds,
-    )
-    row_probe_limit = _probe_row_limit(validated_max_rows)
-
-    if source.source_format == "csv" or "text/csv" in content_type:
-        parsed = _parse_csv_bytes(payload, nrows=row_probe_limit)
-    elif source.source_format == "xlsx":
-        parsed = _parse_excel_bytes(
-            payload,
-            sheet_name=sheet_name,
-            nrows=row_probe_limit,
-        )
-    else:
-        raise SheetAnalysisError("Unsupported response format.")
-
     df = parsed.dataframe
     if df.empty and len(df.columns) == 0:
         raise SheetEmptyError("The sheet is empty.")
@@ -478,6 +472,7 @@ def analyze_sheet(
             "source_kind": source.source_kind,
             "source_format": source.source_format,
             "spreadsheet_id": source.spreadsheet_id,
+            "document_id": source.document_id,
             "gid": source.gid,
             "sheet_name": parsed.sheet_name,
             "content_type": content_type,
@@ -489,25 +484,46 @@ def analyze_sheet(
     }
 
 
-def analyzeSheet(url: str, **kwargs: Any) -> dict[str, Any]:
-    """CamelCase wrapper for parity with JavaScript usage."""
-    return analyze_sheet(url, **kwargs)
+def analyze_sheet_source(
+    source: NormalizedSource,
+    *,
+    sheet_name: str | int | None = None,
+    max_rows: int | None = None,
+    timeout_seconds: int = 30,
+) -> dict[str, Any]:
+    """Fetch, parse, and analyze a sheet-like source."""
+    validated_max_rows = _validate_max_rows(max_rows)
+    payload, content_type, final_url = _download_source(
+        source,
+        timeout_seconds=timeout_seconds,
+    )
+    row_probe_limit = _probe_row_limit(validated_max_rows)
 
+    if source.source_format == "csv" or "text/csv" in content_type:
+        parsed = _parse_csv_bytes(payload, nrows=row_probe_limit)
+    elif source.source_format == "xlsx":
+        parsed = _parse_excel_bytes(
+            payload,
+            sheet_name=sheet_name,
+            nrows=row_probe_limit,
+        )
+    else:
+        raise SheetAnalysisError("Unsupported sheet response format.")
 
-def analyze_sheet_request(payload: dict[str, Any]) -> dict[str, Any]:
-    """API-friendly wrapper that accepts a JSON-like request payload."""
-    return analyze_sheet(
-        payload.get("url", ""),
-        gid=payload.get("gid"),
-        sheet_name=payload.get("sheet_name"),
-        max_rows=payload.get("max_rows"),
-        timeout_seconds=payload.get("timeout_seconds", 30),
+    return _build_result(
+        source,
+        parsed,
+        content_type=content_type,
+        final_url=final_url,
+        validated_max_rows=validated_max_rows,
     )
 
 
 def _build_cli() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Analyze a Google Sheet, CSV export, or Excel file URL.")
-    parser.add_argument("url", help="Google Sheets / CSV / XLSX URL")
+    parser = argparse.ArgumentParser(
+        description="Analyze a Google Sheet, Google Doc, CSV export, text document, .docx file, or Excel file URL."
+    )
+    parser.add_argument("url", help="Google Sheets / Google Docs / CSV / text / DOCX / XLSX URL")
     parser.add_argument("--gid", help="Optional Google Sheets gid", default=None)
     parser.add_argument("--sheet-name", help="Optional Excel sheet name", default=None)
     parser.add_argument("--max-rows", type=int, help="Optional output row limit", default=None)
@@ -516,6 +532,8 @@ def _build_cli() -> argparse.ArgumentParser:
 
 
 if __name__ == "__main__":
+    from . import analyze_sheet
+
     cli = _build_cli()
     args = cli.parse_args()
     result = analyze_sheet(

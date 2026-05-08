@@ -18,34 +18,42 @@ Recommended for this repo:
 - use **`slack_bot.py`** unless you specifically want Hermes Gateway to be the Slack-facing bot
 - use **Hermes Gateway** only when you want the quickest generic Slack setup and do not need the custom Reddit worker behavior
 
-## Sheet Ingest In Slack
+## Sheet And Docs Ingest In Slack
 
-The custom `slack_bot.py` route includes direct sheet-ingest support.
+The custom `slack_bot.py` route includes direct sheet-and-docs ingest support.
 
 Supported links:
 
 - Google Sheets edit links
 - Google Sheets CSV export links
+- Google Docs links
+- direct text document URLs
+- direct `.docx` URLs
 - direct `.xlsx` URLs
 
 Typical Slack usage:
 
 1. send a readable document link
 2. say `read this`
-3. optionally follow up with `give me all that data in a new excel file`
+3. for sheets, optionally follow up with `give me all that data in a new excel file`
+4. for docs, optionally follow up with `export file` or `create docx file`
 
 What the bot does:
 
 - converts Google Sheets edit links into machine-readable CSV export URLs
-- reads the full dataset when the file is publicly accessible
-- summarizes row count, columns, missing values, and sample rows in Slack
-- can generate a new Excel file from the parsed data
+- converts Google Docs links into machine-readable text export URLs
+- reads the full document when the file is publicly accessible
+- summarizes Google Docs as readable text previews in Slack
+- summarizes sheet-like files with row/column analysis in Slack
+- can generate a new Excel file from sheet-like data
+- can generate a new `.docx` file from Google Docs and text-like documents
 
 Important:
 
 - Google Sheets must allow `Anyone with the link` access for direct reading
+- Google Docs must allow `Anyone with the link` access for direct reading
 - the Google Drive install prompt from `Slackbot` is Slack’s own UI behavior, not this repo’s code
-- the active runtime uses the Python sheet reader in `sheet_ingest/python_sheet_reader.py`
+- the active runtime uses the Python reader implementation in `sheet_document_ingest/`
 
 Recommended app name:
 
@@ -64,7 +72,7 @@ This name works well because it sounds professional, clearly matches your Reddit
 From the project root:
 
 ```bash
-cd /Users/bipinpaudel/work/automation
+cd ~/path/to/automation
 uv sync
 ```
 
@@ -495,6 +503,8 @@ Start from the repo template so the variable names and defaults stay clean:
 cp .env.example .env
 ```
 
+If you want the Slack-specific template instead, copy `.env.slack.example` to `.env`.
+
 Add:
 
 ```env
@@ -529,7 +539,7 @@ Important:
 - no spaces around `=`
 - `SLACK_BOT_TOKEN` must be `xoxb-...`
 - `SLACK_APP_TOKEN` must be `xapp-...`
-- start from `.env.example` instead of typing the whole file manually
+- start from `.env.example` or `.env.slack.example` instead of typing the whole file manually
 - `COMPOSIO_TOOLKITS=reddit` keeps the bot Reddit-focused by default
 - `COMPOSIO_TOOLKIT_VERSION_REDDIT=20260316_00` pins the Reddit toolkit version used by the bot
 - `HERMES_ENABLED=true` allows the bot to route general or explicitly prefixed tasks to Hermes

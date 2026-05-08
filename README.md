@@ -8,7 +8,7 @@ Right now this repo supports:
 2. Slack setup guide for Hermes + Composio
 3. Custom Slack bot mode with Composio
 4. CLI terminal mode
-5. Sheet ingest for Google Sheets, CSV exports, and Excel URLs
+5. Sheet and docs ingest for Google Sheets, Google Docs, CSV/text exports, Word docs, and Excel URLs
 
 If you are new, follow this README from top to bottom once and then open the setup guide for the platform you want.
 
@@ -24,8 +24,9 @@ After setup, your bot can:
 - support a custom `slack_bot.py` with real per-user Composio sessions
 - format custom Slack bot replies with Slack-native Block Kit + `mrkdwn`
 - export Reddit research and analysis results from the custom Slack bot into Excel files
-- read public Google Sheets links directly in Slack
-- turn a readable Google Sheet or Excel URL into a new Excel export file from Slack
+- read public Google Sheets and Google Docs links directly in Slack
+- turn a readable Google Sheet into a new Excel export file from Slack
+- turn a readable Google Doc or text document into a new `.docx` export file from Slack
 - manage Slack allowed users dynamically from Slack DMs instead of editing `.env` every time
 - optionally let all Slack users share one Reddit connection instead of connecting Reddit one-by-one
 
@@ -55,12 +56,15 @@ After setup, your bot can:
 - `slack_reddit_agent/formatting.py`: Slack Block Kit formatting and message sanitization
 - `slack_reddit_agent/progress.py`: lightweight progress status updates
 - `slack_reddit_agent/commands.py`: help, tools, and access commands
-- `slack_reddit_agent/exports.py`: Excel payload parsing and `.xlsx` generation
-- `slack_reddit_agent/document_access.py`: direct document reading and Excel export flow for Slack
-- `sheet_ingest/`: Python sheet reader and analyzer used by the Slack bot
-- `sheet_ingest/python_sheet_reader.py`: Google Sheets / CSV / Excel URL analysis
+- `slack_reddit_agent/exports.py`: generated file payload parsing and `.xlsx` / `.docx` creation
+- `slack_reddit_agent/document_access.py`: direct document reading and export flow for Slack
+- `sheet_document_ingest/`: Python sheet and document reader package used by the Slack bot
+- `sheet_document_ingest/sheet_reader.py`: Google Sheets / CSV / XLSX reader logic
+- `sheet_document_ingest/document_reader.py`: Google Docs / text / DOCX reader logic
 - `main.py`: terminal chat app (optional)
 - `.env.example`: safe template for local environment variables
+- `.env.discord.example`: focused template for Discord-only setup
+- `.env.slack.example`: focused template for the Slack Reddit bot
 - `.env`: local secret keys (keep this file private)
 - `DISCORD_SETUP.md`: detailed Discord portal steps
 - `QUICK_START_DISCORD.md`: short checklist
@@ -70,7 +74,7 @@ After setup, your bot can:
 ## Step 1: Open the Project
 
 ```bash
-cd /Users/bipinpaudel/work/automation
+cd ~/path/to/automation
 ```
 
 ## Step 2: Install Dependencies
@@ -100,6 +104,11 @@ Start from the template in the project root:
 ```bash
 cp .env.example .env
 ```
+
+If you only want one mode, you can also start from a focused template:
+
+- `.env.discord.example` for Discord-only setup
+- `.env.slack.example` for the Slack Reddit bot
 
 Then update `.env` with the values you actually need. Minimum Discord example:
 
@@ -131,36 +140,44 @@ For Slack:
 - this is the clean guide for a Reddit-focused AI employee in your SkinPal Slack workspace
 - if you want direct Composio integration per Slack user, Reddit-only behavior, Google Sheet reading, and Excel report uploads, use the custom `slack_bot.py` section below
 
-## Sheet Ingest
+## Sheet And Docs Ingest
 
-This repo includes a Python-based sheet-ingest layer that the Slack bot uses directly.
+This repo includes a Python-based sheet-and-docs ingest layer that the Slack bot uses directly.
 
 It supports:
 
 - Google Sheets edit links
 - Google Sheets CSV export links
+- Google Docs links
+- direct text file URLs
+- direct `.docx` file URLs
 - direct `.xlsx` file URLs
 
 Typical Slack flow:
 
-- paste a public Google Sheet link and say `read this`
-- then follow up with `give me all that data in a new excel file`
+- paste a public Google Sheet or Google Doc link and say `read this`
+- for sheets, follow up with `give me all that data in a new excel file`
+- for docs, follow up with `export file` or `create docx file`
 
 What happens:
 
 - Google Sheets edit links are converted into CSV export URLs automatically
+- Google Docs links are converted into text export URLs automatically
 - the bot reads and analyzes the full document when access allows it
-- if the sheet is private, the bot asks for `Anyone with the link` access
-- export requests can generate a new `.xlsx` file from the parsed data
+- Google Docs are summarized as readable text previews, not spreadsheet-style table summaries
+- if the document is private, the bot asks for `Anyone with the link` access
+- export requests can generate a new `.xlsx` file for sheet-like sources
+- export requests can generate a new `.docx` file for Google Docs and text-like sources
 
 Main implementation:
 
-- [python_sheet_reader.py](/Users/bipinpaudel/work/automation/sheet_ingest/python_sheet_reader.py)
-- [document_access.py](/Users/bipinpaudel/work/automation/slack_reddit_agent/document_access.py)
+- [sheet_reader.py](sheet_document_ingest/sheet_reader.py)
+- [document_reader.py](sheet_document_ingest/document_reader.py)
+- [document_access.py](slack_reddit_agent/document_access.py)
 
 Detailed reference:
 
-- [sheet_ingest/README.md](/Users/bipinpaudel/work/automation/sheet_ingest/README.md)
+- [sheet_document_ingest/README.md](sheet_document_ingest/README.md)
 
 ## Discord Setup
 
@@ -337,7 +354,7 @@ This section documents the full Slack setup path we used for:
 From the project root:
 
 ```bash
-cd /Users/bipinpaudel/work/automation
+cd ~/path/to/automation
 uv sync
 ```
 
@@ -841,7 +858,7 @@ It also pulls recent Slack conversation context into the agent prompt so the bot
 From the project root:
 
 ```bash
-cd /Users/bipinpaudel/work/automation
+cd ~/path/to/automation
 uv sync
 ```
 

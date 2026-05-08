@@ -28,8 +28,9 @@ It can help with:
 - analyzing Reddit threads
 - summarizing current Reddit context
 - creating Excel reports when requested
-- reading public Google Sheets links directly inside Slack
+- reading public Google Sheets and Google Docs links directly inside Slack
 - exporting a previously read Google Sheet into a new Excel file
+- exporting a previously read Google Doc into a new `.docx` file
 
 The bot uses:
 
@@ -55,7 +56,8 @@ The bot uses:
 - `slack_reddit_agent/exports.py`: Excel export parsing and file generation
 - `slack_reddit_agent/document_access.py`: direct document reading and export flow for Slack
 - `slack_reddit_agent/runtime.py`: startup checks and Hermes gateway conflict detection
-- `sheet_ingest/python_sheet_reader.py`: Python sheet-ingest engine used by the Slack bot
+- `sheet_document_ingest/sheet_reader.py`: Python sheet reader used by the Slack bot
+- `sheet_document_ingest/document_reader.py`: Python document reader used by the Slack bot
 - `connect_shared_reddit.py`: helper to connect a shared Reddit account in Composio
 - `.env`: local project settings and secrets
 - `.slack_access_control.json`: dynamic allowlist and admin state
@@ -83,16 +85,19 @@ The Slack Reddit bot now works as one Slack responder with three internal layers
 
 This matters because the older `session.tools()` path often exposed only 6 generic Composio meta-tools. The current bot now fetches real Reddit tools directly and uses those for the actual Reddit workflow, while Hermes now acts as the first-pass orchestrator and direct-reply engine.
 
-There is also a direct document layer before the Hermes/Reddit routing path for supported file links. When a user sends a public Google Sheet, CSV export, or `.xlsx` URL and asks to read it, the bot can answer from the document directly instead of falling back to Reddit analysis.
+There is also a direct document layer before the Hermes/Reddit routing path for supported file links. When a user sends a public Google Sheet, Google Doc, CSV export, text file, `.docx`, or `.xlsx` URL and asks to read it, the bot can answer from the document directly instead of falling back to Reddit analysis.
 
-## Document Access And Sheet Ingest
+## Document Access And Sheet And Docs Ingest
 
-The custom Slack bot includes a Python-based sheet-ingest flow.
+The custom Slack bot includes a Python-based sheet-and-docs ingest flow.
 
 Supported document inputs:
 
 - Google Sheets edit links
 - Google Sheets CSV export links
+- Google Docs links
+- direct text URLs
+- direct `.docx` URLs
 - direct `.xlsx` URLs
 
 Supported Slack actions:
@@ -101,25 +106,31 @@ Supported Slack actions:
 - `summarize this sheet`
 - `open this file`
 - `give me all that data in a new excel file`
+- `export file`
+- `create docx file`
 
 How it works:
 
 1. the bot finds the supported URL in the current Slack message or recent Slack context
 2. for Google Sheets edit links, it converts the link into a CSV export URL automatically
-3. it reads the full sheet when the document is publicly accessible
-4. it returns a Slack summary such as `Document Read`
-5. if the next message asks for a new Excel file, it reuses the same document link from the Slack thread/context and builds a new `.xlsx` file
+3. for Google Docs links, it converts the link into a plain-text export URL automatically
+4. it reads the full document when the document is publicly accessible
+5. for Google Docs and text-like documents, it returns a text-first Slack summary such as `Document Read`
+6. for sheet-like sources, it returns a structured row-and-column summary
+7. if the next message asks for an export, it reuses the same document link from the Slack thread/context
+8. sheet-like sources export to `.xlsx`, while Google Docs and text-like sources export to `.docx` by default unless the user explicitly asks for Excel
 
 Requirements:
 
 - Google Sheets must allow `Anyone with the link` access
+- Google Docs must allow `Anyone with the link` access
 - `.xlsx` links must point directly to a downloadable file
 
 Important notes:
 
 - the `Slackbot` Google Drive install suggestion is Slack’s own product behavior, not this repo’s bot logic
-- the active sheet-ingest runtime is Python
-- the Slack bot uses `sheet_ingest/python_sheet_reader.py` through `slack_reddit_agent/document_access.py`
+- the active sheet-and-docs ingest runtime is Python
+- the Slack bot uses `sheet_document_ingest/` through `slack_reddit_agent/document_access.py`
 
 ## Setup Overview
 
@@ -135,7 +146,7 @@ You need four things ready:
 From the project root:
 
 ```bash
-cd /Users/bipinpaudel/work/automation
+cd ~/path/to/automation
 uv sync
 ```
 

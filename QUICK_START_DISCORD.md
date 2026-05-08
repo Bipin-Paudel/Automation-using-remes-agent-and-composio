@@ -23,24 +23,26 @@ COMPOSIO_API_KEY=your_composio_key
 DISCORD_BOT_TOKEN=your_discord_bot_token
 ```
 
+If you want a starter file, copy `.env.discord.example` to `.env`.
+
 ## 3. Install Dependencies
 
 ```bash
-cd /Users/bipinpaudel/work/automation
+cd ~/path/to/automation
 uv sync
 ```
 
 Or with pip:
 
 ```bash
-cd /Users/bipinpaudel/work/automation
+cd ~/path/to/automation
 pip install -e .
 ```
 
 ## 4. Start the Bot
 
 ```bash
-cd /Users/bipinpaudel/work/automation
+cd ~/path/to/automation
 python discord_bot.py
 ```
 

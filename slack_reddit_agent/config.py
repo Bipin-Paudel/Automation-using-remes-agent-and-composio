@@ -5,7 +5,9 @@ from composio import Composio
 from composio_openai_agents import OpenAIAgentsProvider
 from dotenv import load_dotenv
 
-load_dotenv()
+ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
+
+load_dotenv(ENV_FILE)
 
 LOCK_FILE = ".slack_bot.lock"
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.2")
@@ -55,6 +57,7 @@ SLACK_CONTEXT_CHAR_LIMIT = 3000
 SLACK_CONTEXT_ELEMENTS_LIMIT = 8
 SLACK_PROGRESS_UPDATE_SECONDS = 2
 SLACK_PROGRESS_STAGE_HOLD_SECONDS = 6
+SLACK_PROGRESS_MIN_VISIBLE_SECONDS = 3
 MAX_EXPORT_ROWS = 200
 EXPORTS_DIR = Path("exports")
 ACCESS_CONTROL_FILE = Path(".slack_access_control.json")
